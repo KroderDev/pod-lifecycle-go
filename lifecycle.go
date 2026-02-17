@@ -6,6 +6,7 @@ import (
 	"os/signal"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/kroderdev/pod-lifecycle-go/internal/check"
 	"github.com/kroderdev/pod-lifecycle-go/internal/config"
@@ -23,17 +24,26 @@ const (
 )
 
 var (
-	WithCheckMechanism = config.WithCheckMechanism
-	WithHTTPPort       = config.WithHTTPPort
-	WithGRPCPort       = config.WithGRPCPort
+	WithCheckMechanism  = config.WithCheckMechanism
+	WithHTTPPort        = config.WithHTTPPort
+	WithGRPCPort        = config.WithGRPCPort
+	WithShutdownTimeout = config.WithShutdownTimeout
+	WithCheckerTimeout  = config.WithCheckerTimeout
+	WithErrorHandler    = config.WithErrorHandler
 )
+
+// WithChecker registers a named dependency checker run on every /ready request.
+func WithChecker(name string, c check.Checker) Option {
+	return config.WithChecker(name, c)
+}
 
 // PodManager coordinates pod lifecycle: signals, readiness, liveness, and startup probes.
 type PodManager struct {
-	ready        atomic.Bool
-	shuttingDown atomic.Bool
-	started      atomic.Bool
-	probe        check.Server
+	ready           atomic.Bool
+	shuttingDown    atomic.Bool
+	started         atomic.Bool
+	probe           check.Server
+	shutdownTimeout time.Duration
 }
 
 func (pm *PodManager) Ready() bool        { return pm.ready.Load() }
@@ -41,9 +51,16 @@ func (pm *PodManager) ShuttingDown() bool { return pm.shuttingDown.Load() }
 func (pm *PodManager) Started() bool      { return pm.started.Load() }
 
 // NewPodManager creates a PodManager with the given options.
-func NewPodManager(opts ...Option) *PodManager {
-	cfg := config.ApplyOptions(opts)
-	return &PodManager{probe: config.NewProbe(cfg)}
+// Returns an error if configuration is invalid (e.g. port out of range).
+func NewPodManager(opts ...Option) (*PodManager, error) {
+	cfg, err := config.ApplyOptions(opts)
+	if err != nil {
+		return nil, err
+	}
+	return &PodManager{
+		probe:           config.NewProbe(cfg),
+		shutdownTimeout: cfg.ShutdownTimeout,
+	}, nil
 }
 
 // SetReady marks the pod as ready. Call once your app has finished startup.
@@ -57,6 +74,15 @@ func (pm *PodManager) IsShuttingDown() bool {
 	return pm.shuttingDown.Load()
 }
 
+// shutdown performs a graceful shutdown of the probe server with the configured timeout.
+func (pm *PodManager) shutdown() {
+	pm.shuttingDown.Store(true)
+	pm.probe.SetState(pm.ready.Load(), true)
+	ctx, cancel := context.WithTimeout(context.Background(), pm.shutdownTimeout)
+	defer cancel()
+	pm.probe.Shutdown(ctx)
+}
+
 // Start starts the probe server and blocks until SIGTERM or SIGINT.
 func (pm *PodManager) Start() error {
 	if err := pm.probe.Start(pm, func() { pm.started.Store(true) }); err != nil {
@@ -66,9 +92,7 @@ func (pm *PodManager) Start() error {
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	<-sigCh
 	signal.Stop(sigCh)
-	pm.shuttingDown.Store(true)
-	pm.probe.SetState(pm.ready.Load(), true)
-	pm.probe.Shutdown()
+	pm.shutdown()
 	return nil
 }
 
@@ -78,13 +102,15 @@ func (pm *PodManager) StartContext(ctx context.Context) error {
 		return err
 	}
 	<-ctx.Done()
-	pm.shuttingDown.Store(true)
-	pm.probe.SetState(pm.ready.Load(), true)
-	pm.probe.Shutdown()
+	pm.shutdown()
 	return ctx.Err()
 }
 
 // Start runs a default HTTP PodManager and blocks until SIGTERM/SIGINT.
 func Start() error {
-	return NewPodManager().Start()
+	pm, err := NewPodManager()
+	if err != nil {
+		return err
+	}
+	return pm.Start()
 }
