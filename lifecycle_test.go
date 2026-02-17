@@ -41,7 +41,7 @@ func freePort(t *testing.T) int {
 		t.Fatalf("freePort: %v", err)
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
-	ln.Close()
+	_ = ln.Close()
 	return port
 }
 
@@ -51,7 +51,7 @@ func doGET(t *testing.T, url string) int {
 	if err != nil {
 		t.Fatalf("GET %s: %v", url, err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return resp.StatusCode
 }
 
@@ -189,7 +189,7 @@ func TestPortAlreadyInUseReturnsError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to hold port: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	pm, err := podlifecycle.NewPodManager(podlifecycle.WithHTTPPort(port))
 	if err != nil {
@@ -256,7 +256,7 @@ func TestStartContextPortInUseReturnsError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to hold port: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	pm, err := podlifecycle.NewPodManager(podlifecycle.WithHTTPPort(port))
 	if err != nil {

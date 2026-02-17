@@ -67,36 +67,6 @@ func newProbe(port int, checkers map[string]check.Checker) check.Server {
 	return check.NewHTTPProbe(port, 5*time.Second, 2*time.Second, checkers, nil)
 }
 
-func newProbeTimeout(port int, checkerTimeout time.Duration, checkers map[string]check.Checker) check.Server {
-	return check.NewHTTPProbe(port, 5*time.Second, checkerTimeout, checkers, nil)
-}
-
-// startProbe starts the probe with the given state, waits for it to be up, and returns a cleanup func.
-func startProbe(t *testing.T, probe check.Server, state check.StateReader) (baseURL string, cleanup func()) {
-	t.Helper()
-	started := make(chan struct{})
-	var startErr error
-	go func() {
-		// We need to call Start; use a helper to signal once onStarted fires.
-		startErr = probe.Start(state, func() { close(started) })
-	}()
-	select {
-	case <-started:
-	case <-time.After(3 * time.Second):
-		t.Fatal("probe did not start in time")
-	}
-	if startErr != nil {
-		t.Fatalf("probe.Start: %v", startErr)
-	}
-	// Determine actual port by listening first.
-	// (We call startProbeOnPort for integration tests instead.)
-	return "", func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		probe.Shutdown(ctx)
-	}
-}
-
 // startProbeOnPort starts the probe on a specific port and waits for it.
 func startProbeOnPort(t *testing.T, port int, state check.StateReader, checkers map[string]check.Checker) (baseURL string, cleanup func()) {
 	t.Helper()
@@ -134,7 +104,7 @@ func doGET(t *testing.T, url string) int {
 	if err != nil {
 		t.Fatalf("GET %s: %v", url, err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return resp.StatusCode
 }
 
@@ -145,7 +115,7 @@ func freePort(t *testing.T) int {
 		t.Fatalf("freePort: %v", err)
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
-	ln.Close()
+	_ = ln.Close()
 	return port
 }
 
@@ -233,7 +203,7 @@ func TestMethodGating(t *testing.T) {
 				t.Errorf("%s %s: %v", method, ep, err)
 				continue
 			}
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if resp.StatusCode != http.StatusMethodNotAllowed {
 				t.Errorf("%s %s: want 405, got %d", method, ep, resp.StatusCode)
 			}
@@ -251,7 +221,7 @@ func TestNoCheckers200(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("want 200, got %d", resp.StatusCode)
 	}
@@ -267,7 +237,7 @@ func TestOnePassingChecker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("want 200, got %d", resp.StatusCode)
 	}
@@ -290,7 +260,7 @@ func TestOneFailingChecker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Errorf("want 503, got %d", resp.StatusCode)
 	}
@@ -334,7 +304,7 @@ func TestSlowCheckerTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Errorf("slow checker: want 503, got %d", resp.StatusCode)
 	}
@@ -353,7 +323,7 @@ func TestCheckerReceivesContextCancellation(t *testing.T) {
 	// Request may fail or succeed quickly; we just verify no panic.
 	resp, err := http.DefaultClient.Do(req)
 	if err == nil {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 }
 
@@ -373,7 +343,7 @@ func TestConcurrentReady(t *testing.T) {
 			if err != nil {
 				return
 			}
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		}()
 	}
 	wg.Wait()
@@ -403,7 +373,7 @@ func TestShutdownWithExpiredContextReturnsPromptly(t *testing.T) {
 	// Hold an open connection so GracefulShutdown would otherwise block.
 	conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err == nil {
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)

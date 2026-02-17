@@ -69,7 +69,7 @@ func TestGRPCReadyBeforeSetState(t *testing.T) {
 	defer cleanup()
 
 	client, conn := grpcHealthClient(t, addr)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if got := checkStatus(t, client, "ready"); got != healthpb.HealthCheckResponse_NOT_SERVING {
 		t.Errorf("ready before SetState: want NOT_SERVING, got %v", got)
@@ -92,7 +92,7 @@ func TestGRPCReadyAfterSetStateTrue(t *testing.T) {
 
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	client, conn := grpcHealthClient(t, addr)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if got := checkStatus(t, client, "ready"); got != healthpb.HealthCheckResponse_SERVING {
 		t.Errorf("after SetState(true,false): want SERVING, got %v", got)
@@ -115,7 +115,7 @@ func TestGRPCReadyAfterSetStateFalse(t *testing.T) {
 
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	client, conn := grpcHealthClient(t, addr)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if got := checkStatus(t, client, "ready"); got != healthpb.HealthCheckResponse_NOT_SERVING {
 		t.Errorf("after SetState(false,false): want NOT_SERVING, got %v", got)
@@ -128,7 +128,7 @@ func TestGRPCLiveNormally(t *testing.T) {
 	defer cleanup()
 
 	client, conn := grpcHealthClient(t, addr)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if got := checkStatus(t, client, "live"); got != healthpb.HealthCheckResponse_SERVING {
 		t.Errorf("live normally: want SERVING, got %v", got)
@@ -151,7 +151,7 @@ func TestGRPCLiveShuttingDown(t *testing.T) {
 
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	client, conn := grpcHealthClient(t, addr)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if got := checkStatus(t, client, "live"); got != healthpb.HealthCheckResponse_NOT_SERVING {
 		t.Errorf("live (shuttingDown): want NOT_SERVING, got %v", got)
@@ -164,7 +164,7 @@ func TestGRPCStartupServing(t *testing.T) {
 	defer cleanup()
 
 	client, conn := grpcHealthClient(t, addr)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if got := checkStatus(t, client, "startup"); got != healthpb.HealthCheckResponse_SERVING {
 		t.Errorf("startup after Start: want SERVING, got %v", got)
@@ -187,7 +187,7 @@ func TestGRPCStartupNotServingAfterShutdownState(t *testing.T) {
 
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	client, conn := grpcHealthClient(t, addr)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if got := checkStatus(t, client, "startup"); got != healthpb.HealthCheckResponse_NOT_SERVING {
 		t.Errorf("startup (shuttingDown): want NOT_SERVING, got %v", got)
@@ -218,7 +218,7 @@ func TestGRPCShutdownClosesListener(t *testing.T) {
 	if err != nil {
 		return // expected
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	client := healthpb.NewHealthClient(conn)
 	rpcCtx, rpcCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer rpcCancel()
@@ -243,7 +243,7 @@ func TestGRPCShutdownWithExpiredContextForcesStop(t *testing.T) {
 		streamCtx, streamCancel := context.WithCancel(context.Background())
 		defer streamCancel()
 		_, _ = client.Watch(streamCtx, &healthpb.HealthCheckRequest{Service: "live"})
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 	}
 
 	// Shutdown with an already-expired context → should call Stop().
@@ -291,7 +291,7 @@ func TestGRPCUsesConfiguredPort(t *testing.T) {
 	// Try binding the same wildcard address the probe uses; it must fail.
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err == nil {
-		ln.Close()
+		_ = ln.Close()
 		t.Errorf("expected port %d to be in use, but Listen succeeded", port)
 	}
 	_ = addr
