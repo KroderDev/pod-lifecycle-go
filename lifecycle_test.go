@@ -9,6 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+
 	podlifecycle "github.com/kroderdev/pod-lifecycle-go"
 )
 
@@ -264,6 +268,136 @@ func TestStartContextPortInUseReturnsError(t *testing.T) {
 	}
 	if err := pm.StartContext(context.Background()); err == nil {
 		t.Error("expected error when port is in use, got nil")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// WithExistingGRPCServer tests
+// ---------------------------------------------------------------------------
+
+func grpcHealthCheck(t *testing.T, addr, service string) healthpb.HealthCheckResponse_ServingStatus {
+	t.Helper()
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	client := healthpb.NewHealthClient(conn)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	resp, err := client.Check(ctx, &healthpb.HealthCheckRequest{Service: service})
+	if err != nil {
+		t.Fatalf("health.Check(%q): %v", service, err)
+	}
+	return resp.Status
+}
+
+// TestWithExistingGRPCServerHealthTransitions creates a gRPC server, registers
+// health on it via WithExistingGRPCServer, and verifies that SetReady transitions
+// the "ready" service to SERVING.
+func TestWithExistingGRPCServerHealthTransitions(t *testing.T) {
+	port := freePort(t)
+	grpcSrv := grpc.NewServer()
+
+	pm, err := podlifecycle.NewPodManager(
+		podlifecycle.WithExistingGRPCServer(grpcSrv),
+	)
+	if err != nil {
+		t.Fatalf("NewPodManager: %v", err)
+	}
+
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() { _ = grpcSrv.Serve(lis) }()
+	defer grpcSrv.Stop()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = pm.StartContext(ctx) }()
+
+	// Give StartContext a moment to call probe.Start.
+	time.Sleep(20 * time.Millisecond)
+
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+
+	// Not yet ready.
+	if got := grpcHealthCheck(t, addr, "ready"); got != healthpb.HealthCheckResponse_NOT_SERVING {
+		t.Errorf("before SetReady: want NOT_SERVING, got %v", got)
+	}
+	if got := grpcHealthCheck(t, addr, "live"); got != healthpb.HealthCheckResponse_SERVING {
+		t.Errorf("before SetReady: live want SERVING, got %v", got)
+	}
+
+	pm.SetReady()
+
+	if got := grpcHealthCheck(t, addr, "ready"); got != healthpb.HealthCheckResponse_SERVING {
+		t.Errorf("after SetReady: want SERVING, got %v", got)
+	}
+}
+
+// TestShutdownIdempotent verifies that calling Shutdown multiple times concurrently
+// does not panic or race.
+func TestShutdownIdempotent(t *testing.T) {
+	pm, err := podlifecycle.NewPodManager(podlifecycle.WithHTTPPort(freePort(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = pm.StartContext(ctx) }()
+	time.Sleep(50 * time.Millisecond)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			pm.Shutdown()
+		}()
+	}
+	wg.Wait() // must not panic or deadlock
+}
+
+// TestExplicitShutdownBeforeContextCancel verifies that calling Shutdown() before
+// ctx is cancelled correctly transitions IsShuttingDown, and that the subsequent
+// context cancellation does not re-enter shutdown logic.
+func TestExplicitShutdownBeforeContextCancel(t *testing.T) {
+	port := freePort(t)
+	grpcSrv := grpc.NewServer()
+
+	pm, err := podlifecycle.NewPodManager(
+		podlifecycle.WithExistingGRPCServer(grpcSrv),
+	)
+	if err != nil {
+		t.Fatalf("NewPodManager: %v", err)
+	}
+
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() { _ = grpcSrv.Serve(lis) }()
+	defer grpcSrv.Stop()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- pm.StartContext(ctx) }()
+	time.Sleep(20 * time.Millisecond)
+
+	pm.Shutdown() // explicit shutdown before signal
+
+	if !pm.IsShuttingDown() {
+		t.Error("IsShuttingDown() should be true after Shutdown()")
+	}
+
+	cancel() // cancel ctx — shutdown is already done via Once
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("StartContext did not return after cancel")
 	}
 }
 

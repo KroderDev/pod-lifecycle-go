@@ -99,3 +99,55 @@ func (g *grpcProbe) Shutdown(ctx context.Context) {
 		srv.Stop()
 	}
 }
+
+// ---------------------------------------------------------------------------
+// existingGRPCProbe — shared-port strategy
+// ---------------------------------------------------------------------------
+
+// existingGRPCProbe implements Server by registering the gRPC health service
+// on a caller-owned *grpc.Server instead of starting a new one. Registration
+// happens at construction time so callers can safely call s.Serve afterwards
+// without a registration race.
+//
+// On Shutdown the health statuses are set to NOT_SERVING, but the underlying
+// server is NOT stopped — the caller owns the server and is responsible for
+// calling GracefulStop.
+type existingGRPCProbe struct {
+	health *health.Server
+	mu     sync.Mutex
+}
+
+// NewExistingGRPCProbe creates a Server that registers gRPC health on s.
+// s must not yet be serving when NewExistingGRPCProbe is called.
+func NewExistingGRPCProbe(s *grpc.Server) Server {
+	hs := health.NewServer()
+	healthpb.RegisterHealthServer(s, hs)
+	return &existingGRPCProbe{health: hs}
+}
+
+func (e *existingGRPCProbe) Start(state StateReader, onStarted func()) error {
+	// No new server to start — health is pre-registered on the caller's server.
+	onStarted()
+	e.mu.Lock()
+	hs := e.health
+	e.mu.Unlock()
+	hs.SetServingStatus(serviceStartup, healthpb.HealthCheckResponse_SERVING)
+	applyState(hs, state.Ready(), state.ShuttingDown())
+	return nil
+}
+
+func (e *existingGRPCProbe) SetState(ready, shuttingDown bool) {
+	e.mu.Lock()
+	hs := e.health
+	e.mu.Unlock()
+	applyState(hs, ready, shuttingDown)
+}
+
+func (e *existingGRPCProbe) Shutdown(_ context.Context) {
+	e.mu.Lock()
+	hs := e.health
+	e.mu.Unlock()
+	// Mark all health services NOT_SERVING so load-balancers stop routing.
+	// The caller is responsible for stopping the gRPC server itself.
+	hs.Shutdown()
+}

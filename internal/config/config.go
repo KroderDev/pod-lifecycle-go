@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"time"
 
+	"google.golang.org/grpc"
+
 	"github.com/kroderdev/pod-lifecycle-go/internal/check"
 )
 
@@ -19,13 +21,14 @@ const (
 
 // Config holds PodManager configuration.
 type Config struct {
-	CheckMechanism  CheckMechanism
-	HTTPPort        int
-	GRPCPort        int
-	ShutdownTimeout time.Duration
-	CheckerTimeout  time.Duration
-	Checkers        map[string]check.Checker
-	ErrorHandler    func(error)
+	CheckMechanism     CheckMechanism
+	HTTPPort           int
+	GRPCPort           int
+	ShutdownTimeout    time.Duration
+	CheckerTimeout     time.Duration
+	Checkers           map[string]check.Checker
+	ErrorHandler       func(error)
+	ExistingGRPCServer *grpc.Server
 }
 
 func defaultConfig() Config {
@@ -95,6 +98,12 @@ func WithErrorHandler(h func(error)) Option {
 	}
 }
 
+// WithExistingGRPCServer registers the gRPC health service on s instead of starting
+// a separate probe server. s must not yet be serving when this option is applied.
+func WithExistingGRPCServer(s *grpc.Server) Option {
+	return func(c *Config) { c.ExistingGRPCServer = s }
+}
+
 // ApplyOptions returns a Config with all opts applied, or an error if validation fails.
 func ApplyOptions(opts []Option) (Config, error) {
 	cfg := defaultConfig()
@@ -112,6 +121,9 @@ func ApplyOptions(opts []Option) (Config, error) {
 
 // NewProbe returns a check.Server for the given config.
 func NewProbe(cfg Config) check.Server {
+	if cfg.ExistingGRPCServer != nil {
+		return check.NewExistingGRPCProbe(cfg.ExistingGRPCServer)
+	}
 	switch cfg.CheckMechanism {
 	case CheckGRPC:
 		return check.NewGRPCProbe(cfg.GRPCPort, cfg.ShutdownTimeout)

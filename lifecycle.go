@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/signal"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -24,12 +25,13 @@ const (
 )
 
 var (
-	WithCheckMechanism  = config.WithCheckMechanism
-	WithHTTPPort        = config.WithHTTPPort
-	WithGRPCPort        = config.WithGRPCPort
-	WithShutdownTimeout = config.WithShutdownTimeout
-	WithCheckerTimeout  = config.WithCheckerTimeout
-	WithErrorHandler    = config.WithErrorHandler
+	WithCheckMechanism    = config.WithCheckMechanism
+	WithHTTPPort          = config.WithHTTPPort
+	WithGRPCPort          = config.WithGRPCPort
+	WithShutdownTimeout   = config.WithShutdownTimeout
+	WithCheckerTimeout    = config.WithCheckerTimeout
+	WithErrorHandler      = config.WithErrorHandler
+	WithExistingGRPCServer = config.WithExistingGRPCServer
 )
 
 // WithChecker registers a named dependency checker run on every /ready request.
@@ -44,6 +46,7 @@ type PodManager struct {
 	started         atomic.Bool
 	probe           check.Server
 	shutdownTimeout time.Duration
+	shutdownOnce    sync.Once
 }
 
 func (pm *PodManager) Ready() bool        { return pm.ready.Load() }
@@ -75,13 +78,20 @@ func (pm *PodManager) IsShuttingDown() bool {
 }
 
 // shutdown performs a graceful shutdown of the probe server with the configured timeout.
+// It is idempotent: the body executes exactly once regardless of how many goroutines call it.
 func (pm *PodManager) shutdown() {
-	pm.shuttingDown.Store(true)
-	pm.probe.SetState(pm.ready.Load(), true)
-	ctx, cancel := context.WithTimeout(context.Background(), pm.shutdownTimeout)
-	defer cancel()
-	pm.probe.Shutdown(ctx)
+	pm.shutdownOnce.Do(func() {
+		pm.shuttingDown.Store(true)
+		pm.probe.SetState(pm.ready.Load(), true)
+		ctx, cancel := context.WithTimeout(context.Background(), pm.shutdownTimeout)
+		defer cancel()
+		pm.probe.Shutdown(ctx)
+	})
 }
+
+// Shutdown triggers a graceful shutdown of the probe server. It is safe to call
+// concurrently and from multiple goroutines; the shutdown logic executes exactly once.
+func (pm *PodManager) Shutdown() { pm.shutdown() }
 
 // Start starts the probe server and blocks until SIGTERM or SIGINT.
 func (pm *PodManager) Start() error {

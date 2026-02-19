@@ -282,6 +282,138 @@ func TestGRPCConcurrentSetState(t *testing.T) {
 	wg.Wait()
 }
 
+// ---------------------------------------------------------------------------
+// existingGRPCProbe tests
+// ---------------------------------------------------------------------------
+
+// TestExistingGRPCProbeServingAfterStart verifies that after Start the health
+// service reports SERVING for "live" and reflects the initial state for "ready".
+func TestExistingGRPCProbeServingAfterStart(t *testing.T) {
+	port := freePort(t)
+	srv := grpc.NewServer()
+
+	probe := check.NewExistingGRPCProbe(srv)
+
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() { _ = srv.Serve(lis) }()
+	defer srv.Stop()
+
+	if err := probe.Start(fakeState{ready: true}, func() {}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	client, conn := grpcHealthClient(t, addr)
+	defer func() { _ = conn.Close() }()
+
+	if got := checkStatus(t, client, "live"); got != healthpb.HealthCheckResponse_SERVING {
+		t.Errorf("live: want SERVING, got %v", got)
+	}
+	if got := checkStatus(t, client, "ready"); got != healthpb.HealthCheckResponse_SERVING {
+		t.Errorf("ready (initial ready=true): want SERVING, got %v", got)
+	}
+}
+
+// TestExistingGRPCProbeSetStateTransitions verifies that SetState correctly
+// changes health statuses on the shared server.
+func TestExistingGRPCProbeSetStateTransitions(t *testing.T) {
+	port := freePort(t)
+	srv := grpc.NewServer()
+
+	probe := check.NewExistingGRPCProbe(srv)
+
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() { _ = srv.Serve(lis) }()
+	defer srv.Stop()
+
+	if err := probe.Start(fakeState{ready: false}, func() {}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	client, conn := grpcHealthClient(t, addr)
+	defer func() { _ = conn.Close() }()
+
+	// Initially not ready.
+	if got := checkStatus(t, client, "ready"); got != healthpb.HealthCheckResponse_NOT_SERVING {
+		t.Errorf("before SetState: want NOT_SERVING, got %v", got)
+	}
+
+	// Mark ready.
+	probe.SetState(true, false)
+	if got := checkStatus(t, client, "ready"); got != healthpb.HealthCheckResponse_SERVING {
+		t.Errorf("after SetState(true,false): want SERVING, got %v", got)
+	}
+
+	// Shutting down overrides ready.
+	probe.SetState(true, true)
+	if got := checkStatus(t, client, "ready"); got != healthpb.HealthCheckResponse_NOT_SERVING {
+		t.Errorf("after SetState(true,true): want NOT_SERVING, got %v", got)
+	}
+	if got := checkStatus(t, client, "live"); got != healthpb.HealthCheckResponse_NOT_SERVING {
+		t.Errorf("live while shuttingDown: want NOT_SERVING, got %v", got)
+	}
+}
+
+// TestExistingGRPCProbeShutdownMarksNotServingButKeepsServerRunning verifies
+// that Shutdown marks health NOT_SERVING but does NOT stop the underlying server.
+func TestExistingGRPCProbeShutdownMarksNotServingButKeepsServerRunning(t *testing.T) {
+	port := freePort(t)
+	srv := grpc.NewServer()
+
+	probe := check.NewExistingGRPCProbe(srv)
+
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() { _ = srv.Serve(lis) }()
+	defer srv.Stop()
+
+	if err := probe.Start(fakeState{ready: true}, func() {}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	client, conn := grpcHealthClient(t, addr)
+	defer func() { _ = conn.Close() }()
+
+	// Verify server is up first.
+	if got := checkStatus(t, client, "live"); got != healthpb.HealthCheckResponse_SERVING {
+		t.Fatalf("pre-shutdown live: want SERVING, got %v", got)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	probe.Shutdown(ctx)
+
+	// The gRPC server itself must still be reachable — only health statuses change.
+	// The health server's Shutdown() causes Check to return NOT_SERVING via status updates
+	// but does not close the TCP listener.
+	conn2, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("dial after probe.Shutdown: %v", err)
+	}
+	defer func() { _ = conn2.Close() }()
+	client2 := healthpb.NewHealthClient(conn2)
+	rpcCtx, rpcCancel := context.WithTimeout(context.Background(), time.Second)
+	defer rpcCancel()
+	// After hs.Shutdown() the health server enters NOT_SERVING for all services.
+	resp, err := client2.Check(rpcCtx, &healthpb.HealthCheckRequest{Service: "live"})
+	if err != nil {
+		t.Fatalf("health check after probe.Shutdown: %v", err)
+	}
+	if resp.Status != healthpb.HealthCheckResponse_NOT_SERVING {
+		t.Errorf("after probe.Shutdown: want NOT_SERVING, got %v", resp.Status)
+	}
+}
+
 // Verify the gRPC probe uses the configured port (not a hardcoded fallback).
 func TestGRPCUsesConfiguredPort(t *testing.T) {
 	port := freePort(t)
