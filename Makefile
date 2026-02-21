@@ -1,6 +1,6 @@
 .PHONY: test lint vet
 
-all: test lint vet
+all:  vet test lint
 
 test:
 	go test -cover ./...
