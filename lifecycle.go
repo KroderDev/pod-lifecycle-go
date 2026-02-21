@@ -25,13 +25,14 @@ const (
 )
 
 var (
-	WithCheckMechanism    = config.WithCheckMechanism
-	WithHTTPPort          = config.WithHTTPPort
-	WithGRPCPort          = config.WithGRPCPort
-	WithShutdownTimeout   = config.WithShutdownTimeout
-	WithCheckerTimeout    = config.WithCheckerTimeout
-	WithErrorHandler      = config.WithErrorHandler
+	WithCheckMechanism     = config.WithCheckMechanism
+	WithHTTPPort           = config.WithHTTPPort
+	WithGRPCPort           = config.WithGRPCPort
+	WithShutdownTimeout    = config.WithShutdownTimeout
+	WithCheckerTimeout     = config.WithCheckerTimeout
+	WithErrorHandler       = config.WithErrorHandler
 	WithExistingGRPCServer = config.WithExistingGRPCServer
+	WithExistingHTTPMux    = config.WithExistingHTTPMux
 )
 
 // WithChecker registers a named dependency checker run on every /ready request.
