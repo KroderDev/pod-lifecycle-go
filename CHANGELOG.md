@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/KroderDev/pod-lifecycle-go/compare/v1.1.0...v1.2.0) (2026-02-21)
+
+
+### Features
+
+* **config:** export existing http mux ([c2ed969](https://github.com/KroderDev/pod-lifecycle-go/commit/c2ed969173b8dfc8d7f97115db33022aa64adcfa))
+
 ## [1.1.0](https://github.com/KroderDev/pod-lifecycle-go/compare/v1.0.0...v1.1.0) (2026-02-21)
 
 
