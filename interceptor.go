@@ -3,6 +3,7 @@ package podlifecycle
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"strings"
 	"time"
 
@@ -45,5 +46,48 @@ func LoggingUnaryInterceptor(log *slog.Logger) grpc.UnaryServerInterceptor {
 			)
 		}
 		return resp, err
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HTTP Middleware
+// ---------------------------------------------------------------------------
+
+type statusResponseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusResponseWriter) WriteHeader(code int) {
+	s.status = code
+	s.ResponseWriter.WriteHeader(code)
+}
+
+// LoggingHTTPMiddleware returns an http.Handler middleware that logs
+// every request with method, path, duration, and status code.
+// It automatically skips logging for pod-lifecycle-go health check endpoints
+// (/ready, /live, /startup).
+func LoggingHTTPMiddleware(log *slog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			path := r.URL.Path
+			if path == "/ready" || path == "/live" || path == "/startup" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			start := time.Now()
+			sw := &statusResponseWriter{ResponseWriter: w, status: http.StatusOK}
+			next.ServeHTTP(sw, r)
+			duration := time.Since(start)
+
+			log.Info("http request",
+				"method", r.Method,
+				"path", path,
+				"status", sw.status,
+				"duration", duration,
+				"remote", r.RemoteAddr,
+			)
+		})
 	}
 }

@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/http"
 	"time"
 
 	"google.golang.org/grpc"
@@ -29,6 +30,7 @@ type Config struct {
 	Checkers           map[string]check.Checker
 	ErrorHandler       func(error)
 	ExistingGRPCServer *grpc.Server
+	ExistingHTTPMux    *http.ServeMux
 }
 
 func defaultConfig() Config {
@@ -104,6 +106,12 @@ func WithExistingGRPCServer(s *grpc.Server) Option {
 	return func(c *Config) { c.ExistingGRPCServer = s }
 }
 
+// WithExistingHTTPMux registers the /live, /ready, and /startup HTTP handlers
+// on m instead of starting a separate probe server.
+func WithExistingHTTPMux(m *http.ServeMux) Option {
+	return func(c *Config) { c.ExistingHTTPMux = m }
+}
+
 // ApplyOptions returns a Config with all opts applied, or an error if validation fails.
 func ApplyOptions(opts []Option) (Config, error) {
 	cfg := defaultConfig()
@@ -123,6 +131,9 @@ func ApplyOptions(opts []Option) (Config, error) {
 func NewProbe(cfg Config) check.Server {
 	if cfg.ExistingGRPCServer != nil {
 		return check.NewExistingGRPCProbe(cfg.ExistingGRPCServer)
+	}
+	if cfg.ExistingHTTPMux != nil {
+		return check.NewExistingHTTPProbe(cfg.ExistingHTTPMux, cfg.CheckerTimeout, cfg.Checkers)
 	}
 	switch cfg.CheckMechanism {
 	case CheckGRPC:
