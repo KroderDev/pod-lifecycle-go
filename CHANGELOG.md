@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/KroderDev/pod-lifecycle-go/compare/v1.0.0...v1.1.0) (2026-02-21)
+
+
+### Features
+
+* **main:** http interceptor & shared mux ([19edd06](https://github.com/KroderDev/pod-lifecycle-go/commit/19edd067cafc292e09c59e4f4cb0740bb7b7274e))
+
 ## 1.0.0 (2026-02-21)
 
 
